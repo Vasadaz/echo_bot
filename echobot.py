@@ -1,85 +1,67 @@
-#!/usr/bin/env python
-# pylint: disable=unused-argument, wrong-import-position
-# This program is dedicated to the public domain under the CC0 license.
-
-"""
-Simple Bot to reply to Telegram messages.
-First, a few handler functions are defined. Then, those functions are passed to
-the Application and registered at their respective places.
-Then, the bot is started and runs until we press Ctrl-C on the command line.
-Usage:
-Basic Echobot example, repeats messages.
-Press Ctrl-C on the command line or send a signal to the process to stop the
-bot.
-"""
-
 import logging
+import time
 
 from environs import Env
-from telegram import __version__ as TG_VER
+from telegram import Bot, Update, ForceReply
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-try:
-    from telegram import __version_info__
-except ImportError:
-    __version_info__ = (0, 0, 0, 0, 0)  # type: ignore[assignment]
+from bot_logger import BotLogsHandler
 
-if __version_info__ < (20, 0, 0, "alpha", 1):
-    raise RuntimeError(
-        f"This example is not compatible with your current PTB version {TG_VER}. To view the "
-        f"{TG_VER} version of this example, "
-        f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
-    )
-from telegram import ForceReply, Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__file__)
 
 
-# Define a few command handlers. These usually take the two arguments update and
-# context.
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
-    user = update.effective_user
-    await update.message.reply_html(
-        rf"Hi {user.mention_html()}!",
-        reply_markup=ForceReply(selective=True),
-    )
+def start(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text(f'{update.effective_user.full_name}, будем знакомы, я Бот Ботыч!')
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /help is issued."""
-    await update.message.reply_text("Help!")
+def send_echo_msg(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text(update.message.text)
 
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Echo the user message."""
-    await update.message.reply_text(update.message.text)
+def send_err(update: Update, context: CallbackContext) -> None:
+    logger.error(msg='Exception during message processing:', exc_info=context.error)
+
+    if update.effective_message:
+        text = 'К сожалению произошла ошибка в момент обработки сообщения. ' \
+               'Мы уже работаем над этой проблемой.'
+        update.effective_message.reply_text(text)
 
 
-def main() -> None:
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s:%(levelname)s:%(message)s')
+    logger.setLevel(logging.DEBUG)
+
     env = Env()
     env.read_env()
+    tg_token = env.str('TELEGRAM_BOT_TOKEN')
+    admin_tg_token = env.str('TELEGRAM_ADMIN_BOT_TOKEN', '')
+    admin_tg_chat_id = env.str('TELEGRAM_ADMIN_CHAT_ID', '')
 
-    tg_token = env.str("TELEGRAM_BOT_TOKEN")
+    bot = Bot(tg_token)
+    tg_bot_name = f'@{bot.get_me().username}'
 
-    """Start the bot."""
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(tg_token).build()
+    if not admin_tg_token:
+        admin_tg_token = tg_token
 
-    # on different commands - answer in Telegram
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
+    logger.addHandler(BotLogsHandler(
+        bot_name=tg_bot_name,
+        admin_tg_token=admin_tg_token,
+        admin_tg_chat_id=admin_tg_chat_id,
+    ))
 
-    # on non command i.e message - echo the message on Telegram
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    logger.info('Start Telegram bot.')
 
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling()
+    while True:
+        try:
+            updater = Updater(tg_token)
 
+            dispatcher = updater.dispatcher
+            dispatcher.add_error_handler(send_err)
+            dispatcher.add_handler(CommandHandler('start', start))
+            dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, send_echo_msg))
 
-if __name__ == "__main__":
-    main()
+            updater.start_polling()
+            updater.idle()
+        except Exception as error:
+            logger.exception(error)
+            time.sleep(60)
